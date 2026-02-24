@@ -23,7 +23,10 @@ SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "mypassword123")
 SPREADSHEET_ID = '1rmzPxd8xDBW0ZyPTlQEgSK0ZRu0FDKFo' 
 SHEET_TAB_NAME = 'New Address Data'
 MAX_EXPECTED_COUNT = 1200 
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/spreadsheets.readonly'
+]
 
 # Render will look in the secrets vault; locally it looks in your folder
 TOKEN_FILE = os.environ.get("TOKEN_FILE", "token.json")
