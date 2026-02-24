@@ -12,7 +12,7 @@ from google.auth.transport.requests import Request
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Company Map Analytics", layout="wide")
 
-# Secrets are pulled from Streamlit Cloud "Advanced Settings"
+# Google Sheets Config
 SPREADSHEET_ID = '1rmzPxd8xDBW0ZyPTlQEgSK0ZRu0FDKFo'
 SHEET_TAB_NAME = 'New Address Data'
 
@@ -26,7 +26,7 @@ def get_google_creds():
             creds.refresh(Request())
     return creds
 
-# --- 3. DATA LOADING (WITH CACHING) ---
+# --- 3. DATA LOADING (CACHED) ---
 @st.cache_data(ttl=3600)
 def load_live_data():
     creds = get_google_creds()
@@ -46,14 +46,15 @@ df = load_live_data()
 # Create the Sidebar Placeholder
 with st.sidebar:
     st.header("🏢 Company Directory")
-    st.write("Click any **Cluster** or **Red Marker** to see the list here.")
+    st.write("Click any **Cluster** or **Red Marker** to see the list.")
     st.divider()
-    list_placeholder = st.container()
+    list_placeholder = st.empty() # Using empty for clean updates
 
 # Create the Map
 m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
 
-# Cluster configuration
+# Cluster configuration: We keep zoom enabled so you can drill down, 
+# but we improve the data capture.
 marker_cluster = MarkerCluster(options={
     'zoomToBoundsOnClick': True,
     'spiderfyOnMaxZoom': True,
@@ -75,40 +76,47 @@ for index, row in df.iterrows():
     ).add_to(marker_cluster)
 
 # --- 5. RENDER & CAPTURE ---
-map_output = st_folium(m, width=1100, height=750, returned_objects=["last_object_clicked"])
+# We capture 'last_object_clicked' AND 'last_active_drawing' for better detection
+map_output = st_folium(
+    m, 
+    width=1100, 
+    height=750, 
+    returned_objects=["last_object_clicked", "last_active_drawing", "zoom", "bounds"]
+)
 
-# --- 6. SIDEBAR LIST LOGIC ---
+# --- 6. ADVANCED SIDEBAR LOGIC ---
 clicked_data = map_output.get("last_object_clicked")
+bounds = map_output.get("bounds")
 
-with list_placeholder:
+with list_placeholder.container():
     if clicked_data:
-        lat = clicked_data.get('lat')
-        lng = clicked_data.get('lng')
+        lat, lng = clicked_data.get('lat'), clicked_data.get('lng')
         
-        # Search radius of ~5km to capture cluster members reliably
-        search_radius = 0.05 
+        # INCREASED TOLERANCE
+        # Because clusters report a "center" that might not be on a dot,
+        # we search a small window around the click.
+        search_window = 0.08 # Approx 8-10km radius
         
         matches = df[
-            (abs(df['Address Lat'] - lat) < search_radius) & 
-            (abs(df['Address Long'] - lng) < search_radius)
+            (abs(df['Address Lat'] - lat) < search_window) & 
+            (abs(df['Address Long'] - lng) < search_window)
         ]
         
         if not matches.empty:
-            st.success(f"Found {len(matches)} results nearby")
-            
-            # Show top performers first
+            st.success(f"Found {len(matches)} results in this area")
             matches = matches.sort_values(by='Sales amount', ascending=False)
             
             for _, item in matches.head(50).iterrows():
                 with st.expander(f"📌 {item['Name']}"):
                     st.metric("Sales Amount", f"₹{item.get('Sales amount', 0):,.0f}")
-                    st.write(f"**Location:** `{item['Address Lat']}, {item['Address Long']}`")
+                    st.write(f"**Coordinates:** `{item['Address Lat']}, {item['Address Long']}`")
             
             if len(matches) > 50:
-                st.warning(f"Showing top 50 of {len(matches)} results.")
+                st.warning(f"Showing top 50 performers. Zoom in for full list.")
         else:
-            st.info("Try clicking directly on a red dot or the center of a cluster number.")
-    else:
-        st.info("Select a marker on the map to display company info here.")
-        st.divider()
-        st.write(f"**Total Companies Mapped:** {len(df)}")
+            st.info("No data found at this click. Try clicking a specific red dot.")
+    
+    elif bounds:
+        # Fallback: If nothing is clicked, show a summary of the visible area
+        st.write(f"**Total Records Mapped:** {len(df)}")
+        st.caption("Tip: Click a cluster or marker to see specific details.")
