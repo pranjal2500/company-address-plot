@@ -9,12 +9,10 @@ import json
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
-# --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Company Map Analytics", layout="wide")
 SPREADSHEET_ID = '1rmzPxd8xDBW0ZyPTlQEgSK0ZRu0FDKFo'
 SHEET_TAB_NAME = 'New Address Data'
 
-# --- 2. GOOGLE AUTHENTICATION ---
 def get_google_creds():
     token_info = json.loads(st.secrets["google"]["token_json"])
     creds = Credentials.from_authorized_user_info(token_info)
@@ -23,7 +21,6 @@ def get_google_creds():
             creds.refresh(Request())
     return creds
 
-# --- 3. DATA LOADING (CACHED) ---
 @st.cache_data(ttl=3600)
 def load_live_data():
     creds = get_google_creds()
@@ -36,22 +33,19 @@ def load_live_data():
     df['Address Long'] = pd.to_numeric(df['Address Long'], errors='coerce')
     return df.dropna(subset=['Address Lat', 'Address Long'])
 
-# --- 4. MAP SETUP ---
 st.title("📍 High-Speed Distribution Map")
-st.write("This map is completely decoupled from the server. Dragging and zooming will not cause lag.")
+st.write("Hover over any red marker to see the name and sales amount.")
 
 df = load_live_data()
-
 m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
-
-# Standard Cluster - No hacks, no forced behaviors
 marker_cluster = MarkerCluster().add_to(m)
 
 for index, row in df.iterrows():
     name = str(row.get('Name', 'Unknown'))
     sales = row.get('Sales amount', 0)
     
-    # Clean, simple popup
+    # Adding the bracketed sales amount back
+    hover_text = f"{name} (₹{sales:,.0f})"
     popup_html = f"<div style='min-width: 150px; font-family: sans-serif;'><b>{name}</b><br><span style='color: #d32f2f;'>Sales: ₹{sales:,.0f}</span></div>"
     
     folium.CircleMarker(
@@ -60,11 +54,9 @@ for index, row in df.iterrows():
         color="red",
         fill=True,
         fill_opacity=0.7,
-        tooltip=name,
+        tooltip=hover_text,
         popup=folium.Popup(popup_html, max_width=300)
     ).add_to(marker_cluster)
 
-# --- 5. THE MAGIC FIX: PURE HTML RENDER ---
-# We use st.components.v1.html instead of st_folium. 
-# This prevents Streamlit from trying to "talk" to the map, eliminating the lag entirely.
+# Pure HTML render to prevent Streamlit lag
 components.html(m._repr_html_(), height=750)
