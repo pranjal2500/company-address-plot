@@ -12,7 +12,6 @@ from google.auth.transport.requests import Request
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Company Map Analytics", layout="wide")
 
-# Secrets are pulled from Streamlit Cloud "Advanced Settings"
 SPREADSHEET_ID = '1rmzPxd8xDBW0ZyPTlQEgSK0ZRu0FDKFo'
 SHEET_TAB_NAME = 'New Address Data'
 
@@ -20,13 +19,12 @@ SHEET_TAB_NAME = 'New Address Data'
 def get_google_creds():
     token_info = json.loads(st.secrets["google"]["token_json"])
     creds = Credentials.from_authorized_user_info(token_info)
-    
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
     return creds
 
-# --- 3. DATA LOADING (WITH CACHING) ---
+# --- 3. DATA LOADING (CACHED) ---
 @st.cache_data(ttl=3600)
 def load_live_data():
     creds = get_google_creds()
@@ -39,30 +37,26 @@ def load_live_data():
     df['Address Long'] = pd.to_numeric(df['Address Long'], errors='coerce')
     return df.dropna(subset=['Address Lat', 'Address Long'])
 
-# --- 4. INTERFACE & MAP ---
+# --- 4. INTERFACE & MAP SETUP ---
 st.title("📍 Interactive Distribution Map")
+st.write("Click a red marker or an orange cluster to see details instantly on the right side of the map.")
 df = load_live_data()
 
-# Create the Sidebar Placeholder
-with st.sidebar:
-    st.header("🏢 Company Directory")
-    st.write("Click any **Cluster** or **Red Marker** to see the list here.")
-    st.divider()
-    list_placeholder = st.container()
-
-# Create the Map
 m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
 
-# Cluster configuration
+# CRITICAL: Disable zoom on click to keep the map exactly where you want it
 marker_cluster = MarkerCluster(options={
-    'zoomToBoundsOnClick': True,
-    'spiderfyOnMaxZoom': True,
-    'maxClusterRadius': 60
+    'zoomToBoundsOnClick': False,
+    'spiderfyOnMaxZoom': True
 }).add_to(m)
 
+# Add Markers with detailed tooltips (Javascript will read these tooltips)
 for index, row in df.iterrows():
     name = str(row.get('Name', 'Unknown'))
     sales = row.get('Sales amount', 0)
+    
+    # We package the HTML we want to show directly into the tooltip
+    info_html = f"<b>{name}</b><br>Sales: ₹{sales:,.0f}<br><span style='color:gray; font-size:11px;'>Lat: {row['Address Lat']}, Lng: {row['Address Long']}</span>"
     
     folium.CircleMarker(
         location=[row['Address Lat'], row['Address Long']],
@@ -70,45 +64,89 @@ for index, row in df.iterrows():
         color="red",
         fill=True,
         fill_opacity=0.7,
-        tooltip=name, 
-        popup=f"Sales: {sales}"
+        tooltip=info_html
     ).add_to(marker_cluster)
 
-# --- 5. RENDER & CAPTURE ---
-map_output = st_folium(m, width=1100, height=750, returned_objects=["last_object_clicked"])
+# --- 5. THE MAGIC: JAVASCRIPT INFO PANEL ---
+# This creates a white panel inside the map that acts just like a Streamlit sidebar
+# but updates instantly without making the app say "Running..."
+custom_js = """
+<style>
+.map-sidebar {
+    background: white;
+    padding: 15px;
+    width: 300px;
+    max-height: 600px;
+    overflow-y: auto;
+    box-shadow: 0 0 15px rgba(0,0,0,0.2);
+    border-radius: 5px;
+    font-family: sans-serif;
+}
+.map-sidebar h4 { margin-top: 0; color: #1f77b4; font-size: 16px;}
+.item-card {
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+</style>
 
-# --- 6. SIDEBAR LIST LOGIC ---
-clicked_data = map_output.get("last_object_clicked")
+<script>
+window.addEventListener('load', function() {
+    setTimeout(function() {
+        // Find the Map
+        var mapInstance = null;
+        for (let key in window) {
+            if (key.startsWith('map_') && window[key] instanceof L.Map) { mapInstance = window[key]; break; }
+        }
+        if (!mapInstance) return;
 
-with list_placeholder:
-    if clicked_data:
-        lat = clicked_data.get('lat')
-        lng = clicked_data.get('lng')
-        
-        # Search radius of ~5km to capture cluster members reliably
-        search_radius = 0.05 
-        
-        matches = df[
-            (abs(df['Address Lat'] - lat) < search_radius) & 
-            (abs(df['Address Long'] - lng) < search_radius)
-        ]
-        
-        if not matches.empty:
-            st.success(f"Found {len(matches)} results nearby")
-            
-            # Show top performers first
-            matches = matches.sort_values(by='Sales amount', ascending=False)
-            
-            for _, item in matches.head(50).iterrows():
-                with st.expander(f"📌 {item['Name']}"):
-                    st.metric("Sales Amount", f"₹{item.get('Sales amount', 0):,.0f}")
-                    st.write(f"**Location:** `{item['Address Lat']}, {item['Address Long']}`")
-            
-            if len(matches) > 50:
-                st.warning(f"Showing top 50 of {len(matches)} results.")
-        else:
-            st.info("Try clicking directly on a red dot or the center of a cluster number.")
-    else:
-        st.info("Select a marker on the map to display company info here.")
-        st.divider()
-        st.write(f"**Total Companies Mapped:** {len(df)}")
+        // Build the floating panel
+        var infoPanel = L.control({position: 'topright'});
+        infoPanel.onAdd = function () {
+            var div = L.DomUtil.create('div', 'map-sidebar');
+            div.innerHTML = '<h4>🏢 Company Details</h4><p style="color:gray; font-size:13px;">Click a marker or cluster to view data here.</p>';
+            // Prevent scrolling/clicking the panel from moving the map
+            L.DomEvent.disableClickPropagation(div);
+            L.DomEvent.disableScrollPropagation(div);
+            return div;
+        };
+        infoPanel.addTo(mapInstance);
+
+        // Find the Cluster Layer
+        var clusterLayer = null;
+        for (let key in window) {
+            if (key.startsWith('marker_cluster_') && window[key] instanceof L.MarkerClusterGroup) { clusterLayer = window[key]; break; }
+        }
+
+        if (clusterLayer) {
+            // BEHAVIOR 1: Click a Cluster
+            clusterLayer.on('clusterclick', function (a) {
+                var markers = a.layer.getAllChildMarkers(); // Gets EXACTLY the markers inside
+                var html = '<h4>📍 Found ' + markers.length + ' Locations</h4><hr style="margin:5px 0 10px 0;">';
+                for (var i = 0; i < markers.length; i++) {
+                    var content = markers[i].getTooltip() ? markers[i].getTooltip().getContent() : '';
+                    html += '<div class="item-card">' + content + '</div>';
+                }
+                document.querySelector('.map-sidebar').innerHTML = html;
+            });
+
+            // BEHAVIOR 2: Click a Single Red Dot
+            clusterLayer.on('click', function (a) {
+                var content = a.layer.getTooltip() ? a.layer.getTooltip().getContent() : '';
+                var html = '<h4>📍 1 Location Selected</h4><hr style="margin:5px 0 10px 0;">';
+                html += '<div class="item-card">' + content + '</div>';
+                document.querySelector('.map-sidebar').innerHTML = html;
+            });
+        }
+    }, 1000);
+});
+</script>
+"""
+m.get_root().html.add_child(folium.Element(custom_js))
+
+# --- 6. RENDER THE MAP ---
+# By setting returned_objects to an empty list [], we physically cut the connection
+# between the map clicks and Streamlit. This completely kills the "Running..." delay.
+st_folium(m, width=1300, height=800, returned_objects=[])
