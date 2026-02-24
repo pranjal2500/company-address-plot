@@ -13,7 +13,6 @@ from google.auth.transport.requests import Request
 st.set_page_config(page_title="Company Map Analytics", layout="wide")
 
 # Secrets are pulled from Streamlit Cloud "Advanced Settings"
-SITE_PASSWORD = st.secrets["general"]["site_password"]
 SPREADSHEET_ID = '1rmzPxd8xDBW0ZyPTlQEgSK0ZRu0FDKFo'
 SHEET_TAB_NAME = 'New Address Data'
 
@@ -27,22 +26,7 @@ def get_google_creds():
             creds.refresh(Request())
     return creds
 
-# --- 3. PASSWORD PROTECTION ---
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-
-if not st.session_state["authenticated"]:
-    st.title("🔐 Secure Map Access")
-    pwd = st.text_input("Enter Password", type="password")
-    if st.button("Unlock Map"):
-        if pwd == SITE_PASSWORD:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Invalid Password")
-    st.stop()
-
-# --- 4. DATA LOADING (WITH CACHING) ---
+# --- 3. DATA LOADING (WITH CACHING) ---
 @st.cache_data(ttl=3600)
 def load_live_data():
     creds = get_google_creds()
@@ -55,7 +39,7 @@ def load_live_data():
     df['Address Long'] = pd.to_numeric(df['Address Long'], errors='coerce')
     return df.dropna(subset=['Address Lat', 'Address Long'])
 
-# --- 5. INTERFACE & MAP ---
+# --- 4. INTERFACE & MAP ---
 st.title("📍 Interactive Distribution Map")
 df = load_live_data()
 
@@ -69,7 +53,7 @@ with st.sidebar:
 # Create the Map
 m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
 
-# We enable zoom so the cluster "spreads" slightly to reveal data
+# Cluster configuration
 marker_cluster = MarkerCluster(options={
     'zoomToBoundsOnClick': True,
     'spiderfyOnMaxZoom': True,
@@ -90,11 +74,10 @@ for index, row in df.iterrows():
         popup=f"Sales: {sales}"
     ).add_to(marker_cluster)
 
-# --- 6. RENDER & CAPTURE ---
-# We capture 'last_object_clicked' to trigger the sidebar update
+# --- 5. RENDER & CAPTURE ---
 map_output = st_folium(m, width=1100, height=750, returned_objects=["last_object_clicked"])
 
-# --- 7. SIDEBAR LOGIC ---
+# --- 6. SIDEBAR LIST LOGIC ---
 clicked_data = map_output.get("last_object_clicked")
 
 with list_placeholder:
@@ -102,8 +85,7 @@ with list_placeholder:
         lat = clicked_data.get('lat')
         lng = clicked_data.get('lng')
         
-        # Bypassing the coordinate mismatch: Search within a small radius
-        # 0.05 is roughly 5km, which safely captures cluster members
+        # Search radius of ~5km to capture cluster members reliably
         search_radius = 0.05 
         
         matches = df[
@@ -112,18 +94,18 @@ with list_placeholder:
         ]
         
         if not matches.empty:
-            st.success(f"Found {len(matches)} companies at this location")
+            st.success(f"Found {len(matches)} results nearby")
             
-            # Sort by sales to show high-value targets first
+            # Show top performers first
             matches = matches.sort_values(by='Sales amount', ascending=False)
             
-            for _, item in matches.head(50).iterrows(): # Show top 50 to keep sidebar fast
+            for _, item in matches.head(50).iterrows():
                 with st.expander(f"📌 {item['Name']}"):
                     st.metric("Sales Amount", f"₹{item.get('Sales amount', 0):,.0f}")
-                    st.write(f"**Coordinates:** `{item['Address Lat']}, {item['Address Long']}`")
+                    st.write(f"**Location:** `{item['Address Lat']}, {item['Address Long']}`")
             
             if len(matches) > 50:
-                st.warning(f"Showing top 50 of {len(matches)} results. Zoom in for more precision.")
+                st.warning(f"Showing top 50 of {len(matches)} results.")
         else:
             st.info("Try clicking directly on a red dot or the center of a cluster number.")
     else:
