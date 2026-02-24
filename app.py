@@ -7,17 +7,16 @@ from folium.plugins import MarkerCluster
 from folium.features import DivIcon
 import requests
 import io
-from google.oauth2 import service_account
-import google.auth.transport.requests
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 
 # --- 1. LOAD SECRETS ---
-# This wakes up the .env file and loads your hidden passwords
 load_dotenv()
 
 app = Flask(__name__)
 # Secure the session cookies
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super_secret_random_key_123") 
-# Pull the site password from .env (fallback to 'mypassword123' if not found)
+# Pull the site password from .env (fallback to 'mypassword123' if not found locally)
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "mypassword123") 
 
 # --- CONFIGURATION ---
@@ -25,16 +24,35 @@ SPREADSHEET_ID = '1rmzPxd8xDBW0ZyPTlQEgSK0ZRu0FDKFo'
 SHEET_TAB_NAME = 'New Address Data'
 MAX_EXPECTED_COUNT = 1200 
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-SERVICE_ACCOUNT_FILE = 'service_account.json' # Your bot credentials file
 
-# --- 2. GOOGLE SERVICE ACCOUNT AUTH ---
-def get_service_token():
-    """Silently gets a token using the Service Account (No browser needed)"""
-    creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=SCOPES
-    )
-    auth_req = google.auth.transport.requests.Request()
-    creds.refresh(auth_req)
+# Render will look in the secrets vault; locally it looks in your folder
+TOKEN_FILE = os.environ.get("TOKEN_FILE", "token.json")
+CREDS_FILE = os.environ.get("CREDS_FILE", "credentials.json")
+
+# --- 2. USER TOKEN AUTHENTICATION (THE BYPASS) ---
+def get_access_token():
+    """Silently refreshes your existing personal token without a browser."""
+    creds = None
+    if os.path.exists(TOKEN_FILE):
+        try:
+            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        except Exception as e:
+            print(f"Error loading token: {e}")
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            # Try to save the refreshed token locally. 
+            # On Render, this folder is read-only, so it quietly skips saving, 
+            # but keeps the fresh token alive in memory to serve the map!
+            try:
+                with open(TOKEN_FILE, 'w') as token:
+                    token.write(creds.to_json())
+            except OSError:
+                pass 
+        else:
+            raise Exception("Token expired or missing. Please run the local script to generate a fresh token.json.")
+            
     return creds.token
 
 # --- 3. LOGIN PAGE ROUTE ---
@@ -71,11 +89,11 @@ def map_view():
     if not session.get('logged_in'):
         return redirect('/login')
 
-    print("🔄 Fetching live data from Google Sheets via Service Account...")
+    print("🔄 Fetching live data from Google Sheets via local token...")
     try:
-        token = get_service_token()
+        token = get_access_token()
     except Exception as e:
-        return f"Authentication Error. Make sure service_account.json exists and is valid. Error: {e}", 500
+        return f"Authentication Error. Ensure token.json is valid. Error: {e}", 500
 
     url = f"https://www.googleapis.com/drive/v3/files/{SPREADSHEET_ID}?alt=media"
     headers = {"Authorization": f"Bearer {token}"}
