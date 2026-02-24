@@ -37,26 +37,25 @@ def load_live_data():
     df['Address Long'] = pd.to_numeric(df['Address Long'], errors='coerce')
     return df.dropna(subset=['Address Lat', 'Address Long'])
 
-# --- 4. INTERFACE & MAP SETUP ---
+# --- 4. MAP SETUP ---
 st.title("📍 Interactive Distribution Map")
-st.write("Click a red marker or an orange cluster to see details instantly on the right side of the map.")
 df = load_live_data()
 
 m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
 
-# CRITICAL: Disable zoom on click to keep the map exactly where you want it
+# CRITICAL: Disable zoom on click so the map stays still
 marker_cluster = MarkerCluster(options={
     'zoomToBoundsOnClick': False,
     'spiderfyOnMaxZoom': True
 }).add_to(m)
 
-# Add Markers with detailed tooltips (Javascript will read these tooltips)
+# Add Markers
 for index, row in df.iterrows():
     name = str(row.get('Name', 'Unknown'))
     sales = row.get('Sales amount', 0)
     
-    # We package the HTML we want to show directly into the tooltip
-    info_html = f"<b>{name}</b><br>Sales: ₹{sales:,.0f}<br><span style='color:gray; font-size:11px;'>Lat: {row['Address Lat']}, Lng: {row['Address Long']}</span>"
+    # We format the info cleanly here so the Javascript can just copy-paste it
+    info_html = f"<div style='line-height:1.3;'><b>{name}</b><br><span style='color:green;'>Sales: ₹{sales:,.0f}</span></div>"
     
     folium.CircleMarker(
         location=[row['Address Lat'], row['Address Long']],
@@ -64,89 +63,56 @@ for index, row in df.iterrows():
         color="red",
         fill=True,
         fill_opacity=0.7,
-        tooltip=info_html
+        tooltip=name,
+        popup=folium.Popup(info_html, max_width=250) # The JS reads this popup!
     ).add_to(marker_cluster)
 
-# --- 5. THE MAGIC: JAVASCRIPT INFO PANEL ---
-# This creates a white panel inside the map that acts just like a Streamlit sidebar
-# but updates instantly without making the app say "Running..."
+# --- 5. JAVASCRIPT INJECTION FOR INSTANT CLUSTER POPUPS ---
+# This script grabs all the points inside a cluster and combines them into one neat popup.
 custom_js = """
-<style>
-.map-sidebar {
-    background: white;
-    padding: 15px;
-    width: 300px;
-    max-height: 600px;
-    overflow-y: auto;
-    box-shadow: 0 0 15px rgba(0,0,0,0.2);
-    border-radius: 5px;
-    font-family: sans-serif;
-}
-.map-sidebar h4 { margin-top: 0; color: #1f77b4; font-size: 16px;}
-.item-card {
-    border-bottom: 1px solid #eee;
-    padding-bottom: 10px;
-    margin-bottom: 10px;
-    font-size: 13px;
-    line-height: 1.4;
-}
-</style>
-
 <script>
 window.addEventListener('load', function() {
     setTimeout(function() {
-        // Find the Map
-        var mapInstance = null;
-        for (let key in window) {
-            if (key.startsWith('map_') && window[key] instanceof L.Map) { mapInstance = window[key]; break; }
-        }
-        if (!mapInstance) return;
-
-        // Build the floating panel
-        var infoPanel = L.control({position: 'topright'});
-        infoPanel.onAdd = function () {
-            var div = L.DomUtil.create('div', 'map-sidebar');
-            div.innerHTML = '<h4>🏢 Company Details</h4><p style="color:gray; font-size:13px;">Click a marker or cluster to view data here.</p>';
-            // Prevent scrolling/clicking the panel from moving the map
-            L.DomEvent.disableClickPropagation(div);
-            L.DomEvent.disableScrollPropagation(div);
-            return div;
-        };
-        infoPanel.addTo(mapInstance);
-
-        // Find the Cluster Layer
         var clusterLayer = null;
+        
+        // Find the map's cluster layer
         for (let key in window) {
-            if (key.startsWith('marker_cluster_') && window[key] instanceof L.MarkerClusterGroup) { clusterLayer = window[key]; break; }
+            if (key.startsWith('marker_cluster_') && window[key] instanceof L.MarkerClusterGroup) { 
+                clusterLayer = window[key]; 
+                break; 
+            }
         }
 
         if (clusterLayer) {
-            // BEHAVIOR 1: Click a Cluster
             clusterLayer.on('clusterclick', function (a) {
-                var markers = a.layer.getAllChildMarkers(); // Gets EXACTLY the markers inside
-                var html = '<h4>📍 Found ' + markers.length + ' Locations</h4><hr style="margin:5px 0 10px 0;">';
+                // Get EXACTLY the markers inside this specific cluster
+                var markers = a.layer.getAllChildMarkers(); 
+                
+                // Build a scrollable list popup
+                var html = '<div style="max-height: 250px; overflow-y: auto; width: 220px; font-family: sans-serif;">';
+                html += '<h4 style="margin: 0 0 8px 0; color: #d32f2f; border-bottom: 2px solid #eee; padding-bottom: 4px;">📍 ' + markers.length + ' Locations</h4>';
+                
                 for (var i = 0; i < markers.length; i++) {
-                    var content = markers[i].getTooltip() ? markers[i].getTooltip().getContent() : '';
-                    html += '<div class="item-card">' + content + '</div>';
+                    // Extract the HTML we put into the individual marker's popup
+                    var content = markers[i].getPopup() ? markers[i].getPopup().getContent() : 'Unknown Data';
+                    html += '<div style="border-bottom: 1px solid #eee; padding: 6px 0; font-size: 13px;">' + content + '</div>';
                 }
-                document.querySelector('.map-sidebar').innerHTML = html;
-            });
-
-            // BEHAVIOR 2: Click a Single Red Dot
-            clusterLayer.on('click', function (a) {
-                var content = a.layer.getTooltip() ? a.layer.getTooltip().getContent() : '';
-                var html = '<h4>📍 1 Location Selected</h4><hr style="margin:5px 0 10px 0;">';
-                html += '<div class="item-card">' + content + '</div>';
-                document.querySelector('.map-sidebar').innerHTML = html;
+                html += '</div>';
+                
+                // Open the popup right where the user clicked
+                L.popup({maxWidth: 250})
+                    .setLatLng(a.layer.getLatLng())
+                    .setContent(html)
+                    .openOn(a.layer._map);
             });
         }
-    }, 1000);
+    }, 1000); // Wait 1 second for map to render before attaching script
 });
 </script>
 """
 m.get_root().html.add_child(folium.Element(custom_js))
 
 # --- 6. RENDER THE MAP ---
-# By setting returned_objects to an empty list [], we physically cut the connection
-# between the map clicks and Streamlit. This completely kills the "Running..." delay.
+# THE FIX: returned_objects=[] tells Streamlit to completely ignore map clicks.
+# This 100% eliminates the "Running..." text and lag.
 st_folium(m, width=1300, height=800, returned_objects=[])
