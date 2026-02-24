@@ -1,4 +1,6 @@
 Flask==3.0.0
+# Force a specific numpy version to match pandas expectations
+numpy==1.26.4
 pandas==2.1.1
 folium==0.14.0
 requests==2.31.0
