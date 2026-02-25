@@ -41,21 +41,21 @@ def load_live_data():
 st.title("📍 Interactive Distribution Map")
 df = load_live_data()
 
-# Sidebar Setup
-with st.sidebar:
-    st.header("🏢 Visible Companies")
-    st.write("Zoom in or click a cluster. The list below will update to show companies in your current view.")
-    st.divider()
-    list_placeholder = st.empty()
-
 m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
 
-# We let the cluster zoom normally. No custom Javascript.
-marker_cluster = MarkerCluster().add_to(m)
+# CRITICAL: Disable zoom on click so the map stays still
+marker_cluster = MarkerCluster(options={
+    'zoomToBoundsOnClick': False,
+    'spiderfyOnMaxZoom': True
+}).add_to(m)
 
+# Add Markers
 for index, row in df.iterrows():
     name = str(row.get('Name', 'Unknown'))
     sales = row.get('Sales amount', 0)
+    
+    # We format the info cleanly here so the Javascript can just copy-paste it
+    info_html = f"<div style='line-height:1.3;'><b>{name}</b><br><span style='color:green;'>Sales: ₹{sales:,.0f}</span></div>"
     
     folium.CircleMarker(
         location=[row['Address Lat'], row['Address Long']],
@@ -64,66 +64,55 @@ for index, row in df.iterrows():
         fill=True,
         fill_opacity=0.7,
         tooltip=name,
-        popup=f"Sales: ₹{sales:,.0f}"
+        popup=folium.Popup(info_html, max_width=250) # The JS reads this popup!
     ).add_to(marker_cluster)
 
-# --- 5. CAPTURE MAP BOUNDARIES ---
-# We ask Streamlit for 'bounds' (the corners of your screen) and 'last_object_clicked' (for single red dots)
-map_output = st_folium(
-    m, 
-    width=1100, 
-    height=750, 
-    returned_objects=["bounds", "last_object_clicked"]
-)
+# --- 5. JAVASCRIPT INJECTION FOR INSTANT CLUSTER POPUPS ---
+# This script grabs all the points inside a cluster and combines them into one neat popup.
+custom_js = """
+<script>
+window.addEventListener('load', function() {
+    setTimeout(function() {
+        var clusterLayer = null;
+        
+        // Find the map's cluster layer
+        for (let key in window) {
+            if (key.startsWith('marker_cluster_') && window[key] instanceof L.MarkerClusterGroup) { 
+                clusterLayer = window[key]; 
+                break; 
+            }
+        }
 
-# --- 6. DYNAMIC SIDEBAR LOGIC ---
-with list_placeholder.container():
-    clicked_data = map_output.get("last_object_clicked")
-    bounds = map_output.get("bounds")
-    
-    # SCENARIO 1: User clicked a specific red dot
-    if clicked_data:
-        lat, lng = clicked_data['lat'], clicked_data['lng']
-        exact_match = df[
-            (abs(df['Address Lat'] - lat) < 0.0001) & 
-            (abs(df['Address Long'] - lng) < 0.0001)
-        ]
-        
-        if not exact_match.empty:
-            st.success("📍 Specific Location Selected")
-            for _, item in exact_match.iterrows():
-                with st.expander(f"📌 {item['Name']}", expanded=True):
-                    st.metric("Sales Amount", f"₹{item.get('Sales amount', 0):,.0f}")
-                    st.write(f"**Coordinates:** {item['Address Lat']}, {item['Address Long']}")
-            
-            # Button to clear selection and go back to visible area mode
-            if st.button("Clear Selection"):
-                st.rerun()
+        if (clusterLayer) {
+            clusterLayer.on('clusterclick', function (a) {
+                // Get EXACTLY the markers inside this specific cluster
+                var markers = a.layer.getAllChildMarkers(); 
+                
+                // Build a scrollable list popup
+                var html = '<div style="max-height: 250px; overflow-y: auto; width: 220px; font-family: sans-serif;">';
+                html += '<h4 style="margin: 0 0 8px 0; color: #d32f2f; border-bottom: 2px solid #eee; padding-bottom: 4px;">📍 ' + markers.length + ' Locations</h4>';
+                
+                for (var i = 0; i < markers.length; i++) {
+                    // Extract the HTML we put into the individual marker's popup
+                    var content = markers[i].getPopup() ? markers[i].getPopup().getContent() : 'Unknown Data';
+                    html += '<div style="border-bottom: 1px solid #eee; padding: 6px 0; font-size: 13px;">' + content + '</div>';
+                }
+                html += '</div>';
+                
+                // Open the popup right where the user clicked
+                L.popup({maxWidth: 250})
+                    .setLatLng(a.layer.getLatLng())
+                    .setContent(html)
+                    .openOn(a.layer._map);
+            });
+        }
+    }, 1000); // Wait 1 second for map to render before attaching script
+});
+</script>
+"""
+m.get_root().html.add_child(folium.Element(custom_js))
 
-    # SCENARIO 2: User zoomed in or clicked a cluster (which auto-zooms)
-    elif bounds:
-        # Get the corners of the visible map
-        south, north = bounds["_southWest"]["lat"], bounds["_northEast"]["lat"]
-        west, east = bounds["_southWest"]["lng"], bounds["_northEast"]["lng"]
-        
-        # Filter the dataframe to only show what is inside the screen
-        visible_df = df[
-            (df['Address Lat'] >= south) & (df['Address Lat'] <= north) &
-            (df['Address Long'] >= west) & (df['Address Long'] <= east)
-        ]
-        
-        if len(visible_df) == len(df):
-             st.info("Showing the entire country. Zoom in or click a cluster to narrow down the list.")
-             st.write(f"**Total Records:** {len(df)}")
-             
-        elif not visible_df.empty:
-            st.success(f"👀 {len(visible_df)} companies visible on screen")
-            visible_df = visible_df.sort_values(by='Sales amount', ascending=False)
-            
-            # Limit to 50 so Streamlit doesn't lag out trying to draw thousands of boxes
-            for _, item in visible_df.head(50).iterrows():
-                with st.expander(f"📌 {item['Name']}"):
-                    st.metric("Sales Amount", f"₹{item.get('Sales amount', 0):,.0f}")
-                    
-            if len(visible_df) > 50:
-                st.warning(f"Showing top 50 of {len(visible_df)} visible companies. Zoom in further to see more.")
+# --- 6. RENDER THE MAP ---
+# THE FIX: returned_objects=[] tells Streamlit to completely ignore map clicks.
+# This 100% eliminates the "Running..." text and lag.
+st_folium(m, width=1300, height=800, returned_objects=[])
