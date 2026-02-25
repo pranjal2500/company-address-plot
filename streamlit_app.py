@@ -79,104 +79,44 @@ for _, row in df.iterrows():
 # --- 5. JAVASCRIPT FOR CLUSTER HOVER + CLICK ---
 custom_js = """
 <script>
-window.addEventListener('load', function() {
-  setTimeout(function() {
+function attachClusterEvents() {
+    var maps = Object.values(window).filter(v => v instanceof L.Map);
+    if (maps.length === 0) return;
 
-    var mapInstance = null;
-    for (let key in window) {
-      if (window[key] instanceof L.Map) {
-        mapInstance = window[key];
-        break;
-      }
-    }
-    if (!mapInstance) return;
+    var map = maps[0];
 
-    var clusterLayer = null;
-    for (let id in mapInstance._layers) {
-      var layer = mapInstance._layers[id];
-      if (layer instanceof L.MarkerClusterGroup) {
-        clusterLayer = layer;
-        break;
-      }
-    }
-    if (!clusterLayer) return;
+    map.eachLayer(function(layer) {
+        if (layer instanceof L.MarkerClusterGroup) {
 
-    function extractInfo(marker){
-      var content = marker.getPopup() ? marker.getPopup().getContent() : '';
-      var div = document.createElement('div');
-      div.innerHTML = content;
+            layer.on('clusterclick', function(e) {
+                var markers = e.layer.getAllChildMarkers();
 
-      var name = div.querySelector('b') ? div.querySelector('b').innerText : 'Unknown';
-      var salesText = div.querySelector('span') ? div.querySelector('span').innerText : '';
+                var html = '<div style="max-height:300px; overflow-y:auto; width:280px; font-family:sans-serif;">';
+                html += '<h4 style="margin:0 0 8px 0;">📍 '
+                     + markers.length
+                     + ' Locations</h4>';
 
-      var numberMatch = salesText.match(/[0-9,]+/);
-      var numericSales = numberMatch ? parseFloat(numberMatch[0].replace(/,/g,'')) : 0;
+                for (var i = 0; i < markers.length; i++) {
+                    var content = markers[i].getPopup().getContent();
+                    html += '<div style="border-bottom:1px solid #eee; padding:6px 0;">'
+                         + content
+                         + '</div>';
+                }
 
-      return {name:name, salesText:salesText, sales:numericSales};
-    }
+                html += '</div>';
 
-    // HOVER PREVIEW
-    clusterLayer.on('clustermouseover', function(e) {
-      var markers = e.layer.getAllChildMarkers();
-      var html = '<div style="font-family:sans-serif; font-size:13px; max-width:300px;">';
-      html += '<b>' + markers.length + ' Locations</b><hr>';
+                L.popup({maxWidth:350})
+                  .setLatLng(e.layer.getLatLng())
+                  .setContent(html)
+                  .openOn(map);
+            });
 
-      var previewCount = Math.min(5, markers.length);
-      var total = 0;
-
-      for (var i=0; i<previewCount; i++){
-        var info = extractInfo(markers[i]);
-        total += info.sales;
-
-        html += '<div style="margin-bottom:6px;">'
-             + '<div style="font-weight:600;">' + info.name + '</div>'
-             + '<div style="color:#2e7d32;">' + info.salesText + '</div>'
-             + '</div>';
-      }
-
-      if (markers.length > previewCount) {
-        html += '<div style="color:#666;">and '
-             + (markers.length - previewCount)
-             + ' more...</div>';
-      }
-
-      html += '<hr><div style="font-weight:700;">Preview Total: ₹'
-           + total.toLocaleString()
-           + '</div></div>';
-
-      e.layer.bindTooltip(html, {sticky:true}).openTooltip();
+        }
     });
+}
 
-    clusterLayer.on('clustermouseout', function(e){
-      e.layer.closeTooltip();
-    });
-
-    // CLICK FULL LIST
-    clusterLayer.on('clusterclick', function(e){
-      var markers = e.layer.getAllChildMarkers();
-
-      var html = '<div style="max-height:300px; overflow-y:auto; width:280px; font-family:sans-serif;">';
-      html += '<h4 style="margin:0 0 8px 0;">📍 '
-           + markers.length
-           + ' Locations</h4>';
-
-      for (var i=0; i<markers.length; i++){
-        var content = markers[i].getPopup().getContent();
-        html += '<div style="border-bottom:1px solid #eee; padding:6px 0;">'
-             + content
-             + '</div>';
-      }
-
-      html += '</div>';
-
-      L.popup({maxWidth:350})
-        .setLatLng(e.layer.getLatLng())
-        .setContent(html)
-        .openOn(mapInstance);
-    });
-
-  }, 800);
-});
+// Wait until map fully loads
+setTimeout(attachClusterEvents, 1200);
 </script>
 """
 
