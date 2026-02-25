@@ -79,44 +79,20 @@ for _, row in df.iterrows():
 # --- 5. JAVASCRIPT FOR CLUSTER HOVER + CLICK ---
 custom_js = """
 <script>
-function attachClusterEvents() {
+console.log("JS Loaded");
+
+setTimeout(function() {
+    console.log("Searching for map...");
+
     var maps = Object.values(window).filter(v => v instanceof L.Map);
-    if (maps.length === 0) return;
+    console.log("Maps found:", maps.length);
 
-    var map = maps[0];
-
-    map.eachLayer(function(layer) {
-        if (layer instanceof L.MarkerClusterGroup) {
-
-            layer.on('clusterclick', function(e) {
-                var markers = e.layer.getAllChildMarkers();
-
-                var html = '<div style="max-height:300px; overflow-y:auto; width:280px; font-family:sans-serif;">';
-                html += '<h4 style="margin:0 0 8px 0;">📍 '
-                     + markers.length
-                     + ' Locations</h4>';
-
-                for (var i = 0; i < markers.length; i++) {
-                    var content = markers[i].getPopup().getContent();
-                    html += '<div style="border-bottom:1px solid #eee; padding:6px 0;">'
-                         + content
-                         + '</div>';
-                }
-
-                html += '</div>';
-
-                L.popup({maxWidth:350})
-                  .setLatLng(e.layer.getLatLng())
-                  .setContent(html)
-                  .openOn(map);
-            });
-
-        }
-    });
-}
-
-// Wait until map fully loads
-setTimeout(attachClusterEvents, 1200);
+    if (maps.length > 0) {
+        console.log("Map found successfully");
+    } else {
+        console.log("No map found");
+    }
+}, 1500);
 </script>
 """
 
